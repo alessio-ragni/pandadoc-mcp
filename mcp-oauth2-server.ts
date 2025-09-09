@@ -139,8 +139,119 @@ async function main() {
   });
 }
 
-// Export for Vercel
-export default async function handler(req: express.Request, res: express.Response) {
-  const app = await createMCPServer();
-  return app(req, res);
-}
+// Export for Vercel Serverless Function
+const app = express();
+app.use(express.json());
+
+// OAuth2 Middleware for MCP Server Authentication
+app.use("/mcp", oauth2Middleware);
+
+// Public endpoints (no auth required)
+app.get("/", async (req, res) => {
+  res.json({
+    message: "🚀 PandaDoc MCP Server (OAuth2 Protected)",
+    status: "running", 
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      info: "/",
+      health: "/health",
+      mcpTools: "/mcp/tools",
+      mcpExecuteTool: "/mcp/tools/:toolName"
+    },
+    authentication: "OAuth2 Bearer token required for /mcp/* endpoints"
+  });
+});
+
+app.get("/health", (req, res) => {
+  res.json({ status: "OK", auth: "OAuth2 required for MCP endpoints" });
+});
+
+// OAuth2-protected MCP endpoints
+app.get("/mcp/tools", async (req, res) => {
+  try {
+    const oauth2Tools = await getToolsFromOpenApi(SPEC_URL, {
+      baseUrl: "https://api.pandadoc.com",
+      defaultInclude: true,
+      filterFn: (tool: any) => {
+        return tool.securityRequirements.some((requirement: any) => 
+          Object.keys(requirement).some(key => key.toLowerCase().includes('oauth'))
+        );
+      }
+    });
+
+    res.json({
+      success: true,
+      oauth2Tools: oauth2Tools.length,
+      authentication: "OAuth2 Required (API key tools excluded at generation level)",
+      authScopes: ["read+write"],
+      authUrl: "https://app.pandadoc.com/oauth2/authorize", 
+      tokenUrl: "https://api.pandadoc.com/oauth2/access_token",
+      tools: oauth2Tools.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        method: tool.method,
+        pathTemplate: tool.pathTemplate,
+        parameters: tool.executionParameters,
+        securityRequirements: tool.securityRequirements,
+        requiresOAuth2: true
+      }))
+    });
+  } catch (error) {
+    console.error("❌ Error fetching tools:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to fetch tools"
+    });
+  }
+});
+
+app.post("/mcp/tools/:toolName", async (req, res) => {
+  try {
+    const { toolName } = req.params;
+    const args = req.body;
+    const token = (req as any).token; // Token extracted by middleware
+
+    const oauth2Tools = await getToolsFromOpenApi(SPEC_URL, {
+      baseUrl: "https://api.pandadoc.com",
+      defaultInclude: true,
+      filterFn: (tool: any) => {
+        return tool.securityRequirements.some((requirement: any) => 
+          Object.keys(requirement).some(key => key.toLowerCase().includes('oauth'))
+        );
+      }
+    });
+
+    const tool = oauth2Tools.find(t => t.name === toolName);
+    if (!tool) {
+      return res.status(404).json({
+        success: false,
+        error: `OAuth2-enabled tool '${toolName}' not found (only OAuth2 tools are available)`
+      });
+    }
+
+    res.json({
+      success: true,
+      authenticated: true,
+      authMethod: "OAuth2",
+      tool: {
+        name: tool.name,
+        description: tool.description,
+        method: tool.method,
+        pathTemplate: tool.pathTemplate,
+        securityRequirements: tool.securityRequirements
+      },
+      args,
+      tokenProvided: token ? `${token.substring(0, 10)}...` : null,
+      note: "OAuth2 token validated for MCP server. Ready for PandaDoc API call. To make actual API calls, implement HTTP client with this token."
+    });
+  } catch (error) {
+    console.error("❌ Error executing tool:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to execute tool"
+    });
+  }
+});
+
+// Export for Vercel (simplified)
+export default app;
