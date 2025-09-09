@@ -65,26 +65,24 @@ app.get("/api/tools", async (req, res) => {
   try {
     console.log("🔍 Fetching tools from PandaDoc OpenAPI spec...");
     
-    // Get tools from OpenAPI spec
-    const allTools = await getToolsFromOpenApi(SPEC_URL, {
+    // Get tools from OpenAPI spec - FORCE OAuth2 only at generation level
+    const oauth2Tools = await getToolsFromOpenApi(SPEC_URL, {
       baseUrl: "https://api.pandadoc.com",
-      defaultInclude: true
+      defaultInclude: true,
+      // Filter function to ONLY include OAuth2-authenticated tools
+      filterFn: (tool) => {
+        return tool.securityRequirements.some(requirement => 
+          Object.keys(requirement).some(key => key.toLowerCase().includes('oauth'))
+        );
+      }
     });
 
-    // Filter tools to only include OAuth2-authenticated endpoints
-    const oauth2Tools = allTools.filter(tool => {
-      return tool.securityRequirements.some(requirement => 
-        Object.keys(requirement).some(key => key.toLowerCase().includes('oauth'))
-      );
-    });
-
-    console.log(`✅ Found ${allTools.length} total tools, ${oauth2Tools.length} OAuth2-only tools`);
+    console.log(`✅ Found ${oauth2Tools.length} OAuth2-only tools (API key tools excluded by filterFn)`);
 
     res.json({
       success: true,
-      totalTools: allTools.length,
       oauth2Tools: oauth2Tools.length,
-      authentication: "OAuth2 Required",
+      authentication: "OAuth2 Required (API key tools excluded at generation level)",
       authScopes: ["read+write"],
       authUrl: "https://app.pandadoc.com/oauth2/authorize",
       tokenUrl: "https://api.pandadoc.com/oauth2/access_token",
@@ -133,36 +131,23 @@ app.post("/api/tools/:toolName", async (req, res) => {
 
     const token = authHeader.substring(7); // Remove 'Bearer ' prefix
     
-    // Get tools to find the specific tool
-    const allTools = await getToolsFromOpenApi(SPEC_URL, {
+    // Get OAuth2-only tools using filterFn (same as /api/tools endpoint)
+    const oauth2Tools = await getToolsFromOpenApi(SPEC_URL, {
       baseUrl: "https://api.pandadoc.com",
-      defaultInclude: true
-    });
-
-    // Filter to OAuth2 tools only
-    const oauth2Tools = allTools.filter(tool => {
-      return tool.securityRequirements.some(requirement => 
-        Object.keys(requirement).some(key => key.toLowerCase().includes('oauth'))
-      );
+      defaultInclude: true,
+      // Filter function to ONLY include OAuth2-authenticated tools
+      filterFn: (tool) => {
+        return tool.securityRequirements.some(requirement => 
+          Object.keys(requirement).some(key => key.toLowerCase().includes('oauth'))
+        );
+      }
     });
 
     const tool = oauth2Tools.find(t => t.name === toolName);
     if (!tool) {
       return res.status(404).json({
         success: false,
-        error: `OAuth2-enabled tool '${toolName}' not found`
-      });
-    }
-
-    // Validate OAuth2 security requirements
-    const hasOAuth2 = tool.securityRequirements.some(requirement => 
-      Object.keys(requirement).some(key => key.toLowerCase().includes('oauth'))
-    );
-
-    if (!hasOAuth2) {
-      return res.status(403).json({
-        success: false,
-        error: `Tool '${toolName}' does not support OAuth2 authentication`
+        error: `OAuth2-enabled tool '${toolName}' not found (only OAuth2 tools are available)`
       });
     }
 
