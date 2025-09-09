@@ -144,10 +144,3 @@ export default async function handler(req: express.Request, res: express.Respons
   const app = await createMCPServer();
   return app(req, res);
 }
-
-if (require.main === module) {
-  main().catch((err) => {
-    console.error("❌ Failed to start OAuth2 MCP server:", err);
-    process.exit(1);
-  });
-}
